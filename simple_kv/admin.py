@@ -1,6 +1,6 @@
 import argparse
 
-from simple_kv.lib.kv_db import KvDb, get_uid
+from simple_kv.lib.kv_db import KvDb
 
 
 def main():
@@ -29,7 +29,7 @@ def _register_user(db: KvDb, args, is_delete: bool):
                 raise Exception("No password provided")
 
             print(f"Creating user {args.username} with password {args.password}")
-            db.register_user(conn, args.username, args.password)
+            db.user.register_user(conn, args.username, args.password)
         else:
             print(f"Deleting user {args.username}")
             conn.execute(
@@ -43,7 +43,7 @@ def _register_user(db: KvDb, args, is_delete: bool):
 
 def _set_admin(db: KvDb, args):
     with db.connect() as conn:
-        uid = get_uid(db, args.username)
+        uid = db.user.find_uid_by_username(args.username)
         if not uid:
             raise Exception(f"User does not exist: {args.username}")
 
@@ -76,7 +76,7 @@ def _set_kv_perms(db: KvDb, args):
     db = KvDb()
 
     with db.connect() as conn:
-        uid = get_uid(db, args.username)
+        uid = db.user.find_uid_by_username(args.username)
         if not uid:
             raise Exception(f"User does not exist: {args.username}")
 
@@ -94,7 +94,7 @@ def _set_kv_perms(db: KvDb, args):
                             ?, ?
                         )
                         """,
-                        [uid, db.read_perm(table)],
+                        [uid, db.kv.read_perm(table)],
                     )
                 if not args.no_write:
                     print(f"Enabling write of table {table}")
@@ -106,7 +106,7 @@ def _set_kv_perms(db: KvDb, args):
                             ?, ?
                         )
                         """,
-                        [uid, db.write_perm(table)],
+                        [uid, db.kv.write_perm(table)],
                     )
             else:
                 if not args.no_read:
@@ -129,7 +129,7 @@ def _set_kv_perms(db: KvDb, args):
                             uid = ?
                             AND perm = ?
                         """,
-                        [uid, db.write_perm(table)],
+                        [uid, db.kv.write_perm(table)],
                     )
 
 

@@ -33,11 +33,16 @@ class KvDb(DbWrapper):
 
     SESSION_DURATION_SECONDS = 86400
 
+    user: "_UserHelper"
+    kv: "_KvHelper"
+
     def __init__(self, **kwargs):
         super().__init__(
             DATA_DIR / "kv.sqlite",
             **kwargs,
         )
+
+        self.user = _UserHelper(self)
 
     def init_schema(self, conn: Connection) -> None:
         conn.execute(
@@ -87,6 +92,11 @@ class KvDb(DbWrapper):
             [self.GUEST_USER_ID, self.GUEST_USER, b""],
         )
 
+
+@dataclass
+class _UserHelper:
+    db: KvDb
+
     def register_user(self, conn: Connection, username: str, raw_password: str):
         password = bcrypt.hashpw(raw_password.encode(), bcrypt.gensalt())
 
@@ -118,7 +128,7 @@ class KvDb(DbWrapper):
             return None
 
         sid = secrets.token_hex()
-        duration = datetime.timedelta(seconds=self.SESSION_DURATION_SECONDS)
+        duration = datetime.timedelta(seconds=self.db.SESSION_DURATION_SECONDS)
         expires = duration + datetime.datetime.now(tz=datetime.timezone.utc)
         conn.execute(
             """
@@ -136,7 +146,7 @@ class KvDb(DbWrapper):
         return dict(
             sid=sid,
             uid=r["id"],
-            duration=self.SESSION_DURATION_SECONDS,
+            duration=self.db.SESSION_DURATION_SECONDS,
         )
 
     def vacuum_sessions(self, conn: Connection):
@@ -152,43 +162,6 @@ class KvDb(DbWrapper):
         if cursor.rowcount > 0:
             _LOG.info(f"Vacuum'd {cursor.rowcount} sessions")
 
-    def create_kv_table(self, conn: Connection, raw_table: str):
-        table = self._prepare_kv_table_name(raw_table)
-
-        conn.execute(
-            f"""
-            CREATE TABLE {table.name} (
-                key     TEXT    PRIMARY KEY,
-                value   TEXT    NOT NULL        -- not strict, any data type
-            )
-            """
-        )
-
-    def insert_kv_item(self, conn: Connection, raw_table: str, key: str, value: Any):
-        table = self._prepare_kv_table_name(raw_table)
-
-        conn.execute(
-            f"""
-            INSERT OR REPLACE INTO {table.name} (
-                key, value
-            ) VALUES (
-                ?, ?
-            )
-            """,
-            [key, value],
-        )
-
-    def delete_kv_item(self, conn: Connection, raw_table: str, key: str):
-        table = self._prepare_kv_table_name(raw_table)
-
-        conn.execute(
-            f"""
-            DELETE FROM {table.name}
-            WHERE key = ?
-            """,
-            [key],
-        )
-
     def register_kv_table_user(
         self,
         conn: Connection,
@@ -197,13 +170,13 @@ class KvDb(DbWrapper):
         read=False,
         write=False,
     ):
-        table = self._prepare_kv_table_name(raw_table)
+        table = self.db.kv.prepare_kv_table_name(raw_table)
 
         all_vals = []
         if read:
-            all_vals.append((uid, self.read_perm(table)))
+            all_vals.append((uid, self.db.kv.read_perm(table)))
         if write:
-            all_vals.append((uid, self.write_perm(table)))
+            all_vals.append((uid, self.db.kv.write_perm(table)))
 
         for vals in all_vals:
             conn.execute(
@@ -217,10 +190,132 @@ class KvDb(DbWrapper):
                 vals,
             )
 
-    def _prepare_kv_table_name(self, raw_table: str) -> "ValTableName":
+    def check_sid(self, sid: str) -> int | None:
+        with self.db.connect() as conn:
+            r = conn.execute(
+                """
+                SELECT uid, expires
+                FROM users_sessions
+                WHERE sid = ?
+                """,
+                [sid],
+            ).fetchone()
+
+            if not r:
+                return None
+
+            if r["expires"] < datetime.datetime.now().isoformat():
+                return None
+
+            return r["uid"]
+
+    def check_kv_perms(self, uid: int, raw_table: str) -> dict[str, bool]:
+        table = self.db.kv.prepare_kv_table_name(raw_table)
+
+        return dict(
+            read=self.check_perm(uid, self.db.kv.read_perm(table)),
+            write=self.check_perm(uid, self.db.kv.write_perm(table)),
+        )
+
+    def check_perm(self, uid: int, perm: str) -> bool:
+        with self.db.connect() as conn:
+            r = conn.execute(
+                """
+                SELECT 1
+                FROM users_permissions
+                WHERE
+                    uid = ?
+                    AND perm = ?
+                """,
+                [uid, perm],
+            ).fetchone()
+
+        return bool(r)
+
+    def find_uid_by_username(self, username: str) -> int | None:
+        with self.db.connect() as conn:
+            r = conn.execute(
+                """
+                SELECT id
+                FROM users
+                WHERE user = ?
+                """,
+                [username],
+            ).fetchone()
+            if not r:
+                return None
+
+        return r["id"]
+
+
+@dataclass
+class _KvHelper:
+    db: KvDb
+
+    def create(self, conn: Connection, raw_table: str):
+        table = self.prepare_kv_table_name(raw_table)
+
+        conn.execute(
+            f"""
+            CREATE TABLE {table.name} (
+                key     TEXT    PRIMARY KEY,
+                value   TEXT    NOT NULL        -- not strict, any data type
+            )
+            """
+        )
+
+    def select_value(self, raw_table: str, key: str):
+        table = self.prepare_kv_table_name(raw_table)
+
+        with self.db.connect() as conn:
+            r = conn.execute(
+                f"""
+                SELECT value FROM {table.name}
+                WHERE key = ?
+                """,
+                [key],
+            ).fetchone()
+
+        if not r:
+            return dict(
+                value=None,
+                exists=False,
+            )
+
+        return dict(
+            value=r["value"],
+            exists=True,
+        )
+
+    def insert(self, conn: Connection, raw_table: str, key: str, value: Any):
+        table = self.prepare_kv_table_name(raw_table)
+
+        conn.execute(
+            f"""
+            INSERT OR REPLACE INTO {table.name} (
+                key, value
+            ) VALUES (
+                ?, ?
+            )
+            """,
+            [key, value],
+        )
+
+    def delete(self, conn: Connection, raw_table: str, key: str):
+        table = self.prepare_kv_table_name(raw_table)
+
+        conn.execute(
+            f"""
+            DELETE FROM {table.name}
+            WHERE key = ?
+            """,
+            [key],
+        )
+
+    def prepare_kv_table_name(self, raw_table: str) -> "ValTableName":
         table = "kv_" + raw_table.lower()
 
-        m = re.search(r"[^\w]", table)
+        m = re.search(r"[^a-z_]", table, re.IGNORECASE)
         if m:
             raise Exception(f"Invalid table name: {raw_table}")
 
@@ -231,88 +326,3 @@ class KvDb(DbWrapper):
 
     def write_perm(self, table: "ValTableName"):
         return f"{table.name}_write"
-
-
-def check_sid(db: KvDb, sid: str) -> int | None:
-    with db.connect() as conn:
-        r = conn.execute(
-            """
-            SELECT uid, expires
-            FROM users_sessions
-            WHERE sid = ?
-            """,
-            [sid],
-        ).fetchone()
-
-        if not r:
-            return None
-
-        if r["expires"] < datetime.datetime.now().isoformat():
-            return None
-
-        return r["uid"]
-
-
-def get_uid(db: KvDb, username: str):
-    with db.connect() as conn:
-        r = conn.execute(
-            """
-            SELECT id
-            FROM users
-            WHERE user = ?
-            """,
-            [username],
-        ).fetchone()
-        if not r:
-            return None
-
-    return r["id"]
-
-
-def check_user_perm(db: KvDb, uid: int, perm: str):
-    with db.connect() as conn:
-        r = conn.execute(
-            """
-            SELECT 1
-            FROM users_permissions
-            WHERE
-                uid = ?
-                AND perm = ?
-            """,
-            [uid, perm],
-        ).fetchone()
-
-    return bool(r)
-
-
-def check_table_perms(db: KvDb, uid: int, raw_table: str):
-    table = db._prepare_kv_table_name(raw_table)
-
-    return dict(
-        read=check_user_perm(db, uid, db.read_perm(table)),
-        write=check_user_perm(db, uid, db.write_perm(table)),
-    )
-
-
-def select_from_kv(db: KvDb, raw_table: str, key: str):
-    table = db._prepare_kv_table_name(raw_table)
-
-    with db.connect() as conn:
-        r = conn.execute(
-            f"""
-            SELECT value FROM {table.name}
-            WHERE key = ?
-            """,
-            [key],
-        ).fetchone()
-
-    if not r:
-        return dict(
-            value=None,
-            exists=False,
-        )
-
-    return dict(
-        value=r["value"],
-        exists=True,
-    )

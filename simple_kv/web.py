@@ -11,13 +11,7 @@ from litestar.exceptions import NotAuthorizedException
 from litestar.logging import LoggingConfig
 from litestar.params import Parameter
 
-from simple_kv.lib.kv_db import (
-    KvDb,
-    check_sid,
-    check_table_perms,
-    check_user_perm,
-    select_from_kv,
-)
+from simple_kv.lib.kv_db import KvDb
 
 
 @get("/ping")
@@ -37,7 +31,7 @@ async def login(data: LoginDto) -> Response[dict]:
     db = KvDb()
 
     with db.connect() as conn:
-        session = db.login(conn, data.username, data.password)
+        session = db.user.login(conn, data.username, data.password)
         if not session:
             raise NotAuthorizedException()
 
@@ -69,20 +63,20 @@ async def create_kv_table(
     db = KvDb()
 
     # Check session
-    uid = check_sid(db, sid)
+    uid = db.user.check_sid(sid)
     if not uid:
         raise NotAuthorizedException()
 
     # Check perms
-    can_create = check_user_perm(db, uid, db.ADMIN_PERM)
+    can_create = db.user.check_perm(uid, db.ADMIN_PERM)
     if not can_create:
         raise NotAuthorizedException()
 
     # Create
     with db.connect() as conn:
-        db.create_kv_table(conn, data.name)
+        db.kv.create(conn, data.name)
 
-        db.register_kv_table_user(
+        db.user.register_kv_table_user(
             conn,
             data.name,
             uid,
@@ -90,7 +84,7 @@ async def create_kv_table(
             write=True,
         )
 
-        db.register_kv_table_user(
+        db.user.register_kv_table_user(
             conn,
             data.name,
             db.GUEST_USER_ID,
@@ -113,7 +107,7 @@ async def get_kv_item(
         raise NotAuthorizedException()
 
     # Select
-    return select_from_kv(db, raw_table, key)
+    return db.kv.select_value(raw_table, key)
 
 
 @dataclass
@@ -137,7 +131,7 @@ async def set_kv_item(
 
     # Insert
     with db.connect() as conn:
-        db.insert_kv_item(conn, raw_table, key, data.value)
+        db.kv.insert(conn, raw_table, key, data.value)
 
 
 @delete("/kv/{raw_table:str}/{key:str}")
@@ -155,7 +149,7 @@ async def delete_kv_item(
 
     # Delete
     with db.connect() as conn:
-        return db.delete_kv_item(conn, raw_table, key)
+        return db.kv.delete(conn, raw_table, key)
 
 
 def _check_kv_perms(
@@ -165,20 +159,20 @@ def _check_kv_perms(
     sid: str | None,
 ):
     # Check guest
-    guest_perms = check_table_perms(db, db.GUEST_USER_ID, raw_table)
+    guest_perms = db.user.check_kv_perms(db.GUEST_USER_ID, raw_table)
     if guest_perms[perm_type]:
         return True
 
     # Check user
     if sid:
-        uid = check_sid(db, sid)
+        uid = db.user.check_sid(sid)
         if uid:
-            perms = check_table_perms(db, uid, raw_table)
+            perms = db.user.check_kv_perms(uid, raw_table)
             if perms[perm_type]:
                 return True
             else:
                 # Check admin
-                is_admin = check_user_perm(db, uid, db.ADMIN_PERM)
+                is_admin = db.user.check_perm(uid, db.ADMIN_PERM)
                 if is_admin:
                     return True
 
