@@ -39,6 +39,7 @@ curl 'http://localhost:8267/kv/test/my_key' \
 -H 'Cookie: sid=some_session_id'
 
 # Read data
+# Cookie header like above is required if table was created without allow_guest_read
 curl 'http://localhost:8267/kv/test/my_key'
 # {"value":"my_value","exists":true}
 ```
