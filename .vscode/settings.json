@@ -1,0 +1,10 @@
+{
+    "python-envs.pythonProjects": [],
+    "python.analysis.packageIndexDepths": [
+        {
+            "name": "litestar",
+            "depth": 3,
+            "includeAllSymbols": true
+        }
+    ]
+}
