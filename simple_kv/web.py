@@ -61,7 +61,7 @@ class CreateTableDto:
 
 
 # @todo: ep for modifying perms
-@post("/create_kv_table")
+@post("/create_kv")
 async def create_kv_table(
     data: CreateTableDto,
     sid: Annotated[str, Parameter(cookie="sid")],

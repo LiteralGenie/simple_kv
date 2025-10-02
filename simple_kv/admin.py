@@ -8,17 +8,23 @@ def main():
 
     args = _parse_args()
     match args.cmd:
-        case "register":
-            _register_user(db, args)
+        case "create" | "delete":
+            _register_user(
+                db,
+                args,
+                is_delete=args.cmd == "delete",
+            )
         case "admin":
             _set_admin(db, args)
         case "table":
             _set_kv_perms(db, args)
+        case _:
+            raise Exception(f"Invalid command {args.cmd}")
 
 
-def _register_user(db: KvDb, args):
+def _register_user(db: KvDb, args, is_delete: bool):
     with db.connect() as conn:
-        if not args.remove:
+        if not is_delete:
             if not args.password:
                 raise Exception("No password provided")
 
@@ -144,15 +150,17 @@ def _parse_args():
 
 def _parse_register_user(subs: argparse._SubParsersAction):
     parser: argparse.ArgumentParser = subs.add_parser(
-        "register",
-        description="Add user",
+        "create",
+        description="Create user",
     )
     parser.add_argument("username")
-    parser.add_argument("password", required=False)
-    parser.add_argument(
-        "--remove",
-        action="store_true",
+    parser.add_argument("password")
+
+    parser: argparse.ArgumentParser = subs.add_parser(
+        "delete",
+        description="Delete user",
     )
+    parser.add_argument("username")
 
 
 def _parse_set_admin_perm(subs: argparse._SubParsersAction):

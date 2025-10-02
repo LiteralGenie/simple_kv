@@ -58,7 +58,7 @@ class KvDb(DbWrapper):
                 perm    TEXT        NOT NULL,
 
                 UNIQUE (uid, perm),
-                FOREIGN KEY (uid) REFERENCES users (id)
+                FOREIGN KEY (uid) REFERENCES users (id) ON DELETE CASCADE
             ) STRICT
             """
         )
@@ -70,7 +70,7 @@ class KvDb(DbWrapper):
                 expires     TEXT        NOT NULL,
 
                 UNIQUE (uid, sid),
-                FOREIGN KEY (uid) REFERENCES users (id)
+                FOREIGN KEY (uid) REFERENCES users (id) ON DELETE CASCADE
             ) STRICT
             """
         )
@@ -197,27 +197,25 @@ class KvDb(DbWrapper):
         read=False,
         write=False,
     ):
-        if not read and not write:
-            return
-
         table = self._prepare_kv_table_name(raw_table)
 
-        vals = []
+        all_vals = []
         if read:
-            vals.append((uid, self.read_perm(table)))
+            all_vals.append((uid, self.read_perm(table)))
         if write:
-            vals.append((uid, self.write_perm(table)))
+            all_vals.append((uid, self.write_perm(table)))
 
-        conn.execute(
-            f"""
-            INSERT INTO users_permissions
-                (uid, perm)
-            VALUES
-                (?, ?),
-                (?, ?)
-            """,
-            vals,
-        )
+        for vals in all_vals:
+            conn.execute(
+                f"""
+                INSERT INTO users_permissions (
+                    uid, perm
+                ) VALUES (
+                    ?, ?
+                )
+                """,
+                vals,
+            )
 
     def _prepare_kv_table_name(self, raw_table: str) -> "ValTableName":
         table = "kv_" + raw_table.lower()
