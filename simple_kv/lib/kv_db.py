@@ -31,10 +31,11 @@ class KvDb(DbWrapper):
 
     ADMIN_PERM = "admin"
 
+    SESSION_DURATION_SECONDS = 86400
+
     def __init__(self, **kwargs):
         super().__init__(
             DATA_DIR / "kv.sqlite",
-            missing_ok=True,
             **kwargs,
         )
 
@@ -44,7 +45,7 @@ class KvDb(DbWrapper):
             CREATE TABLE IF NOT EXISTS users (
                 id      INTEGER     PRIMARY KEY,
                 user    TEXT        NOT NULL,
-                pass    TEXT        NOT NULL,
+                pass    BLOB        NOT NULL,
 
                 UNIQUE (user)
             ) STRICT
@@ -83,7 +84,7 @@ class KvDb(DbWrapper):
                 ?, ?, ?
             )
             """,
-            [self.GUEST_USER_ID, self.GUEST_USER, ""],
+            [self.GUEST_USER_ID, self.GUEST_USER, b""],
         )
 
     def register_user(self, conn: Connection, username: str, raw_password: str):
@@ -100,43 +101,42 @@ class KvDb(DbWrapper):
             [username, password],
         )
 
-    def login(self, conn: Connection, username: str, raw_password: str):
-        uid = get_uid(self, username)
-        password = bcrypt.hashpw(raw_password.encode(), bcrypt.gensalt())
-
+    def login(self, conn: Connection, username: str, raw_password: str) -> dict | None:
         r = conn.execute(
             """
-                SELECT uid
+                SELECT id, pass
                 FROM users
                 WHERE user = ?
-                AND pass = ?
                 """,
-            [username, password],
+            [username],
         ).fetchone()
-
         if not r:
             return None
 
+        is_password_match = bcrypt.checkpw(raw_password.encode(), r["pass"])
+        if not is_password_match:
+            return None
+
         sid = secrets.token_hex()
-        duration = datetime.timedelta(days=1)
+        duration = datetime.timedelta(seconds=self.SESSION_DURATION_SECONDS)
         expires = duration + datetime.datetime.now(tz=datetime.timezone.utc)
         conn.execute(
             """
-            INSERT INTO user_sessions (
+            INSERT INTO users_sessions (
                 uid, sid, expires
             ) VALUES (
                 ?, ?, ?
             )
             """,
-            [uid, sid, expires.isoformat()],
+            [r["id"], sid, expires.isoformat()],
         )
 
         self.vacuum_sessions(conn)
 
         return dict(
             sid=sid,
-            uid=r["uid"],
-            username=username,
+            uid=r["id"],
+            duration=self.SESSION_DURATION_SECONDS,
         )
 
     def vacuum_sessions(self, conn: Connection):
@@ -262,7 +262,11 @@ def get_uid(db: KvDb, username: str):
             WHERE user = ?
             """,
             [username],
-        )
+        ).fetchone()
+        if not r:
+            return None
+
+    return r["id"]
 
 
 def check_user_perm(db: KvDb, uid: int, perm: str):

@@ -1,8 +1,14 @@
+import argparse
+import asyncio
+import socket
 from dataclasses import dataclass
 from typing import Annotated, Literal
 
+import uvicorn
 from litestar import Litestar, Response, delete, get, post
+from litestar.datastructures import Cookie
 from litestar.exceptions import NotAuthorizedException
+from litestar.logging import LoggingConfig
 from litestar.params import Parameter
 
 from simple_kv.lib.kv_db import (
@@ -27,7 +33,7 @@ class LoginDto:
 
 # Rate limit handled by nginx
 @post("/login")
-async def login(data: LoginDto):
+async def login(data: LoginDto) -> Response[dict]:
     db = KvDb()
 
     with db.connect() as conn:
@@ -37,7 +43,13 @@ async def login(data: LoginDto):
 
     return Response(
         session,
-        headers=dict(sid=session["sid"]),
+        cookies=[
+            Cookie(
+                key="sid",
+                value=session["sid"],
+                max_age=session["duration"],
+            ),
+        ],
     )
 
 
@@ -53,7 +65,7 @@ class CreateTableDto:
 async def create_kv_table(
     data: CreateTableDto,
     sid: Annotated[str, Parameter(cookie="sid")],
-):
+) -> None:
     db = KvDb()
 
     # Check session
@@ -88,11 +100,11 @@ async def create_kv_table(
 
 
 @get("/kv/{raw_table:str}/{key:str}")
-def get_kv_item(
+async def get_kv_item(
     raw_table: str,
     key: str,
     sid: Annotated[str | None, Parameter(cookie="sid")],
-):
+) -> dict:
     db = KvDb()
 
     # Check perms
@@ -110,12 +122,12 @@ class SetKvDto:
 
 
 @post("/kv/{raw_table:str}/{key:str}")
-def set_kv_item(
+async def set_kv_item(
     data: SetKvDto,
     raw_table: str,
     key: str,
     sid: Annotated[str | None, Parameter(cookie="sid")],
-):
+) -> None:
     db = KvDb()
 
     # Check perms
@@ -129,11 +141,11 @@ def set_kv_item(
 
 
 @delete("/kv/{raw_table:str}/{key:str}")
-def delete_kv_item(
+async def delete_kv_item(
     raw_table: str,
     key: str,
     sid: Annotated[str | None, Parameter(cookie="sid")],
-):
+) -> None:
     db = KvDb()
 
     # Check perms
@@ -173,6 +185,15 @@ def _check_kv_perms(
     return False
 
 
+logging_config = LoggingConfig(
+    root={"level": "INFO", "handlers": ["queue_listener"]},
+    formatters={
+        "standard": {"format": "%(asctime)s - %(name)s - %(levelname)s - %(message)s"}
+    },
+    log_exceptions="always",
+)
+
+
 app = Litestar(
     [
         ping,
@@ -181,5 +202,44 @@ app = Litestar(
         get_kv_item,
         set_kv_item,
         delete_kv_item,
-    ]
+    ],
+    logging_config=logging_config,
 )
+
+
+def _parse_args():
+    parser = argparse.ArgumentParser()
+
+    parser.add_argument("--host", type=str, default="0.0.0.0")
+    parser.add_argument("--port", type=int, default=8267)
+
+    args = parser.parse_args()
+    return args
+
+
+async def main():
+    args = _parse_args()
+
+    config = uvicorn.Config(
+        "__main__:app",
+        port=args.port,
+        host=args.host,
+        workers=1,
+    )
+
+    server = uvicorn.Server(config)
+
+    print(f"Running web server at host={config.host} port={config.port}")
+    sock = socket.socket(family=socket.AF_INET)
+    sock.setsockopt(socket.SOL_SOCKET, socket.SO_REUSEADDR, 1)
+    sock.setsockopt(socket.SOL_SOCKET, socket.SO_REUSEPORT, 1)
+    sock.bind((config.host, config.port))
+
+    await server.serve(sockets=[sock])
+
+
+if __name__ == "__main__":
+    # Init db file
+    KvDb(missing_ok=True)
+
+    asyncio.run(main())

@@ -5,7 +5,7 @@ build-backend = "hatchling.build"
 [project]
 name = "simple_kv"
 dynamic = ["version"]
-dependencies = ["litestar", "bcrypt", "loguru"]
+dependencies = ["litestar", "bcrypt", "loguru", "uvicorn"]
 
 [tool.hatch.version]
 source = "vcs"
