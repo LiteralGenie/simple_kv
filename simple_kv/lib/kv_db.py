@@ -141,14 +141,16 @@ class KvDb(DbWrapper):
 
     def vacuum_sessions(self, conn: Connection):
         cursor = conn.cursor()
-        conn.execute(
+        cursor.execute(
             """
             DELETE FROM users_sessions
             WHERE expires < ?
             """,
             [datetime.datetime.now().isoformat()],
         )
-        _LOG.info(f"Vacuum'd {cursor.rowcount} sessions")
+
+        if cursor.rowcount > 0:
+            _LOG.info(f"Vacuum'd {cursor.rowcount} sessions")
 
     def create_kv_table(self, conn: Connection, raw_table: str):
         table = self._prepare_kv_table_name(raw_table)

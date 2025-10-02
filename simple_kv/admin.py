@@ -19,6 +19,9 @@ def main():
 def _register_user(db: KvDb, args):
     with db.connect() as conn:
         if not args.remove:
+            if not args.password:
+                raise Exception("No password provided")
+
             print(f"Creating user {args.username} with password {args.password}")
             db.register_user(conn, args.username, args.password)
         else:
@@ -145,7 +148,7 @@ def _parse_register_user(subs: argparse._SubParsersAction):
         description="Add user",
     )
     parser.add_argument("username")
-    parser.add_argument("password")
+    parser.add_argument("password", required=False)
     parser.add_argument(
         "--remove",
         action="store_true",
