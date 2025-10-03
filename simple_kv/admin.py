@@ -1,35 +1,35 @@
 import argparse
 
-from simple_kv.lib.kv_db import KvDb
+from simple_kv.lib.kv.kv_mgr import KvMgr
 
 
 def main():
-    db = KvDb(missing_ok=True)
+    mgr = KvMgr()
 
     args = _parse_args()
     match args.cmd:
         case "create" | "delete":
             _register_user(
-                db,
+                mgr,
                 args,
                 is_delete=args.cmd == "delete",
             )
         case "admin":
-            _set_admin(db, args)
+            _set_admin(mgr, args)
         case "table":
-            _set_kv_perms(db, args)
+            _set_kv_perms(mgr, args)
         case _:
             raise Exception(f"Invalid command {args.cmd}")
 
 
-def _register_user(db: KvDb, args, is_delete: bool):
-    with db.connect() as conn:
+def _register_user(mgr: KvMgr, args, is_delete: bool):
+    with mgr.user_db.connect() as conn:
         if not is_delete:
             if not args.password:
                 raise Exception("No password provided")
 
             print(f"Creating user {args.username} with password {args.password}")
-            db.user.register_user(conn, args.username, args.password)
+            mgr.user_db.register_user(conn, args.username, args.password)
         else:
             print(f"Deleting user {args.username}")
             conn.execute(
@@ -41,9 +41,9 @@ def _register_user(db: KvDb, args, is_delete: bool):
             )
 
 
-def _set_admin(db: KvDb, args):
-    with db.connect() as conn:
-        uid = db.user.find_uid_by_username(args.username)
+def _set_admin(mgr: KvMgr, args):
+    with mgr.user_db.connect() as conn:
+        uid = mgr.user_db.find_uid_by_username(args.username)
         if not uid:
             raise Exception(f"User does not exist: {args.username}")
 
@@ -57,7 +57,7 @@ def _set_admin(db: KvDb, args):
                     ?, ?
                 )
                 """,
-                [uid, db.ADMIN_PERM],
+                [uid, mgr.ADMIN_PERM],
             )
         else:
             print(f"Removing admin perm from {args.username}")
@@ -68,24 +68,24 @@ def _set_admin(db: KvDb, args):
                     uid = ?
                     AND perm = ?
                 """,
-                [uid, db.ADMIN_PERM],
+                [uid, mgr.ADMIN_PERM],
             )
 
 
-def _set_kv_perms(db: KvDb, args):
-    db = KvDb()
+def _set_kv_perms(mgr: KvMgr, args):
+    mgr = KvMgr()
 
-    with db.connect() as conn:
-        uid = db.user.find_uid_by_username(args.username)
+    with mgr.user_db.connect() as conn:
+        uid = mgr.user_db.find_uid_by_username(args.username)
         if not uid:
             raise Exception(f"User does not exist: {args.username}")
 
         print(f"Modifying permissions for {args.username}")
 
-        for table in args.tables:
+        for dbid in args.tables:
             if not args.remove:
                 if not args.no_read:
-                    print(f"Enabling read of table {table}")
+                    print(f"Enabling read of table {dbid}")
                     conn.execute(
                         """
                         INSERT OR REPLACE INTO users_permissions (
@@ -94,10 +94,10 @@ def _set_kv_perms(db: KvDb, args):
                             ?, ?
                         )
                         """,
-                        [uid, db.kv.read_perm(table)],
+                        [uid, mgr.user_db.read_perm(dbid)],
                     )
                 if not args.no_write:
-                    print(f"Enabling write of table {table}")
+                    print(f"Enabling write of table {dbid}")
                     conn.execute(
                         """
                         INSERT OR REPLACE INTO users_permissions (
@@ -106,11 +106,11 @@ def _set_kv_perms(db: KvDb, args):
                             ?, ?
                         )
                         """,
-                        [uid, db.kv.write_perm(table)],
+                        [uid, mgr.user_db.write_perm(dbid)],
                     )
             else:
                 if not args.no_read:
-                    print(f"Disabling read of table {table}")
+                    print(f"Disabling read of table {dbid}")
                     conn.execute(
                         """
                         DELETE FROM users_permissions
@@ -118,10 +118,10 @@ def _set_kv_perms(db: KvDb, args):
                             uid = ?
                             AND perm = ?
                         """,
-                        [uid, db.ADMIN_PERM],
+                        [uid, mgr.ADMIN_PERM],
                     )
                 if not args.no_write:
-                    print(f"Disabling write of table {table}")
+                    print(f"Disabling write of table {dbid}")
                     conn.execute(
                         """
                         DELETE FROM users_permissions
@@ -129,7 +129,7 @@ def _set_kv_perms(db: KvDb, args):
                             uid = ?
                             AND perm = ?
                         """,
-                        [uid, db.kv.write_perm(table)],
+                        [uid, mgr.user_db.write_perm(dbid)],
                     )
 
 

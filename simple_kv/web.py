@@ -11,7 +11,7 @@ from litestar.exceptions import NotAuthorizedException
 from litestar.logging import LoggingConfig
 from litestar.params import Parameter
 
-from simple_kv.lib.kv_db import KvDb
+from simple_kv.lib.kv.kv_mgr import KvMgr
 
 
 @get("/ping")
@@ -28,10 +28,10 @@ class LoginDto:
 # Rate limit handled by nginx
 @post("/login")
 async def login(data: LoginDto) -> Response[dict]:
-    db = KvDb()
+    mgr = KvMgr()
 
-    with db.connect() as conn:
-        session = db.user.login(conn, data.username, data.password)
+    with mgr.user_db.connect() as conn:
+        session = mgr.user_db.login(conn, data.username, data.password)
         if not session:
             raise NotAuthorizedException()
 
@@ -60,23 +60,23 @@ async def create_kv_table(
     data: CreateTableDto,
     sid: Annotated[str, Parameter(cookie="sid")],
 ) -> None:
-    db = KvDb()
+    mgr = KvMgr()
 
     # Check session
-    uid = db.user.check_sid(sid)
+    uid = mgr.user_db.check_sid(sid)
     if not uid:
         raise NotAuthorizedException()
 
     # Check perms
-    can_create = db.user.check_perm(uid, db.ADMIN_PERM)
+    can_create = mgr.user_db.check_perm(uid, mgr.ADMIN_PERM)
     if not can_create:
         raise NotAuthorizedException()
 
     # Create
-    with db.connect() as conn:
-        db.kv.create(conn, data.name)
+    with mgr.user_db.connect() as conn:
+        mgr.db(data.name, missing_ok=True)
 
-        db.user.register_kv_table_user(
+        mgr.user_db.register_kv_table_user(
             conn,
             data.name,
             uid,
@@ -84,30 +84,30 @@ async def create_kv_table(
             write=True,
         )
 
-        db.user.register_kv_table_user(
+        mgr.user_db.register_kv_table_user(
             conn,
             data.name,
-            db.GUEST_USER_ID,
+            mgr.GUEST_USER_ID,
             read=data.allow_guest_read,
             write=data.allow_guest_write,
         )
 
 
-@get("/kv/{raw_table:str}/{key:str}")
+@get("/kv/{dbid:str}/{key:str}")
 async def get_kv_item(
-    raw_table: str,
+    dbid: str,
     key: str,
     sid: Annotated[str | None, Parameter(cookie="sid")],
 ) -> dict:
-    db = KvDb()
+    mgr = KvMgr()
 
     # Check perms
-    can_read = _check_kv_perms(db, raw_table, "read", sid)
+    can_read = _check_kv_perms(mgr, dbid, "read", sid)
     if not can_read:
         raise NotAuthorizedException()
 
     # Select
-    return db.kv.select_value(raw_table, key)
+    return mgr.db(dbid).select.one(key)
 
 
 @dataclass
@@ -115,64 +115,66 @@ class SetKvDto:
     value: str | float | bool
 
 
-@post("/kv/{raw_table:str}/{key:str}")
+@post("/kv/{dbid:str}/{key:str}")
 async def set_kv_item(
     data: SetKvDto,
-    raw_table: str,
+    dbid: str,
     key: str,
     sid: Annotated[str | None, Parameter(cookie="sid")],
 ) -> None:
-    db = KvDb()
+    mgr = KvMgr()
+    db = mgr.db(dbid)
 
     # Check perms
-    can_write = _check_kv_perms(db, raw_table, "write", sid)
+    can_write = _check_kv_perms(mgr, dbid, "write", sid)
     if not can_write:
         raise NotAuthorizedException()
 
     # Insert
     with db.connect() as conn:
-        db.kv.insert(conn, raw_table, key, data.value)
+        db.insert.one(conn, key, data.value)
 
 
-@delete("/kv/{raw_table:str}/{key:str}")
+@delete("/kv/{dbid:str}/{key:str}")
 async def delete_kv_item(
-    raw_table: str,
+    dbid: str,
     key: str,
     sid: Annotated[str | None, Parameter(cookie="sid")],
 ) -> None:
-    db = KvDb()
+    mgr = KvMgr()
+    db = mgr.db(dbid)
 
     # Check perms
-    can_write = _check_kv_perms(db, raw_table, "write", sid)
+    can_write = _check_kv_perms(mgr, dbid, "write", sid)
     if not can_write:
         raise NotAuthorizedException()
 
     # Delete
     with db.connect() as conn:
-        return db.kv.delete(conn, raw_table, key)
+        return db.delete.one(conn, key)
 
 
 def _check_kv_perms(
-    db: KvDb,
-    raw_table: str,
+    mgr: KvMgr,
+    dbid: str,
     perm_type: Literal["read", "write"],
     sid: str | None,
 ):
     # Check guest
-    guest_perms = db.user.check_kv_perms(db.GUEST_USER_ID, raw_table)
+    guest_perms = mgr.user_db.check_kv_perms(mgr.GUEST_USER_ID, dbid)
     if guest_perms[perm_type]:
         return True
 
     # Check user
     if sid:
-        uid = db.user.check_sid(sid)
+        uid = mgr.user_db.check_sid(sid)
         if uid:
-            perms = db.user.check_kv_perms(uid, raw_table)
+            perms = mgr.user_db.check_kv_perms(uid, dbid)
             if perms[perm_type]:
                 return True
             else:
                 # Check admin
-                is_admin = db.user.check_perm(uid, db.ADMIN_PERM)
+                is_admin = mgr.user_db.check_perm(uid, mgr.ADMIN_PERM)
                 if is_admin:
                     return True
 
@@ -233,7 +235,7 @@ async def main():
 
 
 if __name__ == "__main__":
-    # Init db file
-    KvDb(missing_ok=True)
+    # Init user db file
+    KvMgr()
 
     asyncio.run(main())
