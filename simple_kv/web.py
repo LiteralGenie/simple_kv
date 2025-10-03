@@ -154,6 +154,31 @@ async def delete_kv_item(
         return db.delete.one(conn, key)
 
 
+@dataclass
+class ExecuteSqlDto:
+    sql: str
+
+
+@post("/execute/{dbid:str}")
+async def execute_sql(
+    data: ExecuteSqlDto,
+    dbid: str,
+    sid: Annotated[str | None, Parameter(cookie="sid")],
+) -> list[dict]:
+    mgr = KvMgr()
+
+    can_read = _check_kv_perms(mgr, dbid, "read", sid)
+    can_write = _check_kv_perms(mgr, dbid, "write", sid)
+    if not (can_read and can_write):
+        raise NotAuthorizedException()
+
+    db = mgr.db(dbid)
+    with db.connect() as conn:
+        rs = conn.execute(data.sql).fetchall()
+
+    return [dict(r) for r in rs]
+
+
 def _check_kv_perms(
     mgr: KvMgr,
     dbid: str,
@@ -198,6 +223,7 @@ app = Litestar(
         get_kv_item,
         set_kv_item,
         delete_kv_item,
+        execute_sql,
     ],
     logging_config=logging_config,
 )

@@ -12,18 +12,21 @@ from simple_kv.lib.utils.kv_utils import KvIdentifier
 class KvDb(DbWrapper):
     enable_authorizer: bool
 
+    dbid: str
+    real_dbid: str
     select: "_KvDbSelect"
     insert: "_KvDbInsert"
     delete: "_KvDbDelete"
 
-    def __init__(self, save_dir: Path, name: KvIdentifier, **kwargs):
-        self.enable_authorizer = False
+    def __init__(self, save_dir: Path, dbid: KvIdentifier, **kwargs):
+        self.dbid = dbid.text
+        self.real_dbid = f"kv_{dbid.text}"
 
+        self.enable_authorizer = False
         super().__init__(
-            save_dir / f"kv_{name.text}.sqlite",
+            save_dir / f"kv_{dbid.text}.sqlite",
             **kwargs,
         )
-
         self.enable_authorizer = True
 
         self.select = _KvDbSelect(self)
@@ -33,7 +36,7 @@ class KvDb(DbWrapper):
     def init_schema(self, conn: Connection) -> None:
         conn.execute(
             f"""
-            CREATE TABLE kv (
+            CREATE TABLE IF NOT EXISTS kv (
                 key     TEXT    PRIMARY KEY,
                 value   TEXT    NOT NULL        -- not strict, any data type
             )
@@ -54,13 +57,23 @@ class KvDb(DbWrapper):
             return sqlite3.SQLITE_OK
 
         match (action_code, arg2, arg3):
+            case (sqlite3.SQLITE_CREATE_INDEX, index, "kv"):
+                return sqlite3.SQLITE_OK
             case (sqlite3.SQLITE_INSERT, "kv", None):
                 return sqlite3.SQLITE_OK
             case (sqlite3.SQLITE_READ, "kv", col):
                 return sqlite3.SQLITE_OK
             case (sqlite3.SQLITE_SELECT, None, None):
                 return sqlite3.SQLITE_OK
+            case (sqlite3.SQLITE_TRANSACTION, "BEGIN", None):
+                return sqlite3.SQLITE_OK
+            case (sqlite3.SQLITE_TRANSACTION, "COMMIT", None):
+                return sqlite3.SQLITE_OK
+            case (sqlite3.SQLITE_TRANSACTION, "ROLLBACK", None):
+                return sqlite3.SQLITE_OK
             case (sqlite3.SQLITE_UPDATE, "kv", col):
+                return sqlite3.SQLITE_OK
+            case (sqlite3.SQLITE_ALTER_TABLE, self.real_dbid, "kv"):
                 return sqlite3.SQLITE_OK
             case _:
                 name = "???"
