@@ -18,8 +18,6 @@ class KvMgr:
 
     ADMIN_PERM = "admin"
 
-    SESSION_DURATION_SECONDS = 86400
-
     save_dir: Path
     user_db: "KvUserDb"
 
@@ -39,6 +37,11 @@ class KvMgr:
             name,
             missing_ok=missing_ok,
         )
+
+    def db_exists(self, raw_name: str):
+        name = KvIdentifier.validate(raw_name)
+        fp = self.save_dir / KvDb.save_name(name)
+        return fp.exists()
 
 
 class KvUserDb(DbWrapper):
@@ -73,7 +76,7 @@ class KvUserDb(DbWrapper):
             CREATE TABLE IF NOT EXISTS users_sessions (
                 uid         INTEGER     NOT NULL,
                 sid         TEXT        NOT NULL,
-                expires     TEXT        NOT NULL,
+                expires     TEXT,
 
                 UNIQUE (uid, sid),
                 FOREIGN KEY (uid) REFERENCES users (id) ON DELETE CASCADE
@@ -107,7 +110,13 @@ class KvUserDb(DbWrapper):
             [username, password],
         )
 
-    def login(self, conn: Connection, username: str, raw_password: str) -> dict | None:
+    def login(
+        self,
+        conn: Connection,
+        username: str,
+        raw_password: str,
+        seconds: int | None = 86400,
+    ) -> dict | None:
         r = conn.execute(
             """
             SELECT id, pass
@@ -124,8 +133,15 @@ class KvUserDb(DbWrapper):
             return None
 
         sid = secrets.token_hex()
-        duration = datetime.timedelta(seconds=KvMgr.SESSION_DURATION_SECONDS)
-        expires = duration + datetime.datetime.now(tz=datetime.timezone.utc)
+
+        if seconds:
+            duration = datetime.timedelta(seconds=seconds)
+            expires = duration + datetime.datetime.now(tz=datetime.timezone.utc)
+            expires = expires.isoformat()
+        else:
+            duration = None
+            expires = None
+
         conn.execute(
             """
             INSERT INTO users_sessions (
@@ -134,7 +150,7 @@ class KvUserDb(DbWrapper):
                 ?, ?, ?
             )
             """,
-            [r["id"], sid, expires.isoformat()],
+            [r["id"], sid, expires],
         )
 
         self.vacuum_sessions(conn)
@@ -142,7 +158,9 @@ class KvUserDb(DbWrapper):
         return dict(
             sid=sid,
             uid=r["id"],
-            duration=KvMgr.SESSION_DURATION_SECONDS,
+            username=username,
+            duration=seconds,
+            expires=expires,
         )
 
     def vacuum_sessions(self, conn: Connection):
@@ -198,7 +216,10 @@ class KvUserDb(DbWrapper):
             if not r:
                 return None
 
-            if r["expires"] < datetime.datetime.now().isoformat():
+            if (
+                r["expires"] is not None
+                and r["expires"] < datetime.datetime.now().isoformat()
+            ):
                 return None
 
             return r["uid"]

@@ -2,16 +2,19 @@ import argparse
 import asyncio
 import socket
 from dataclasses import dataclass
-from typing import Annotated, Literal
+from typing import Annotated, Literal, TypeAlias
 
 import uvicorn
 from litestar import Litestar, Response, delete, get, post
+from litestar.config.cors import CORSConfig
 from litestar.datastructures import Cookie
 from litestar.exceptions import NotAuthorizedException
 from litestar.logging import LoggingConfig
 from litestar.params import Parameter
 
 from simple_kv.lib.kv.kv_mgr import KvMgr
+
+JsonValue: TypeAlias = str | float | bool | None
 
 
 @get("/ping")
@@ -23,6 +26,7 @@ async def ping() -> str:
 class LoginDto:
     username: str
     password: str
+    duration: int | None
 
 
 # Rate limit handled by nginx
@@ -31,7 +35,12 @@ async def login(data: LoginDto) -> Response[dict]:
     mgr = KvMgr()
 
     with mgr.user_db.connect() as conn:
-        session = mgr.user_db.login(conn, data.username, data.password)
+        session = mgr.user_db.login(
+            conn,
+            data.username,
+            data.password,
+            seconds=data.duration,
+        )
         if not session:
             raise NotAuthorizedException()
 
@@ -42,6 +51,9 @@ async def login(data: LoginDto) -> Response[dict]:
                 key="sid",
                 value=session["sid"],
                 max_age=session["duration"],
+                httponly=True,
+                samesite="none",
+                secure=True,
             ),
         ],
     )
@@ -58,8 +70,8 @@ class CreateTableDto:
 @post("/create_kv")
 async def create_kv_table(
     data: CreateTableDto,
-    sid: Annotated[str, Parameter(cookie="sid")],
-) -> None:
+    sid: Annotated[str, Parameter(header="sid")],
+) -> bool:
     mgr = KvMgr()
 
     # Check session
@@ -71,6 +83,9 @@ async def create_kv_table(
     can_create = mgr.user_db.check_perm(uid, mgr.ADMIN_PERM)
     if not can_create:
         raise NotAuthorizedException()
+
+    if mgr.db_exists(data.name):
+        return False
 
     # Create
     with mgr.user_db.connect() as conn:
@@ -92,12 +107,14 @@ async def create_kv_table(
             write=data.allow_guest_write,
         )
 
+    return True
+
 
 @get("/kv/{dbid:str}/{key:str}")
 async def get_kv_item(
     dbid: str,
     key: str,
-    sid: Annotated[str | None, Parameter(cookie="sid")],
+    sid: Annotated[str | None, Parameter(header="sid")],
 ) -> dict:
     mgr = KvMgr()
 
@@ -112,7 +129,7 @@ async def get_kv_item(
 
 @dataclass
 class SetKvDto:
-    value: str | float | bool
+    value: JsonValue
 
 
 @post("/kv/{dbid:str}/{key:str}")
@@ -120,7 +137,7 @@ async def set_kv_item(
     data: SetKvDto,
     dbid: str,
     key: str,
-    sid: Annotated[str | None, Parameter(cookie="sid")],
+    sid: Annotated[str | None, Parameter(header="sid")],
 ) -> None:
     mgr = KvMgr()
     db = mgr.db(dbid)
@@ -135,11 +152,36 @@ async def set_kv_item(
         db.insert.one(conn, key, data.value)
 
 
+@dataclass
+class SetKvBulkDto:
+    items: list[tuple[str, JsonValue]]
+
+
+@post("/kv/{dbid:str}")
+async def set_kv_bulk(
+    data: SetKvBulkDto,
+    dbid: str,
+    sid: Annotated[str | None, Parameter(header="sid")],
+) -> None:
+    mgr = KvMgr()
+    db = mgr.db(dbid)
+
+    # Check perms
+    can_write = _check_kv_perms(mgr, dbid, "write", sid)
+    if not can_write:
+        raise NotAuthorizedException()
+
+    # Insert
+    with db.connect() as conn:
+        for [k, v] in data.items:
+            db.insert.one(conn, k, v)
+
+
 @delete("/kv/{dbid:str}/{key:str}")
 async def delete_kv_item(
     dbid: str,
     key: str,
-    sid: Annotated[str | None, Parameter(cookie="sid")],
+    sid: Annotated[str | None, Parameter(header="sid")],
 ) -> None:
     mgr = KvMgr()
     db = mgr.db(dbid)
@@ -163,7 +205,7 @@ class ExecuteSqlDto:
 async def execute_sql(
     data: ExecuteSqlDto,
     dbid: str,
-    sid: Annotated[str | None, Parameter(cookie="sid")],
+    sid: Annotated[str | None, Parameter(header="sid")],
 ) -> list[dict]:
     mgr = KvMgr()
 
@@ -174,7 +216,7 @@ async def execute_sql(
 
     db = mgr.db(dbid)
     with db.connect() as conn:
-        rs = conn.execute(data.sql).fetchall()
+        rs = conn.executescript(data.sql).fetchall()
 
     return [dict(r) for r in rs]
 
@@ -207,7 +249,7 @@ def _check_kv_perms(
 
 
 logging_config = LoggingConfig(
-    root={"level": "INFO", "handlers": ["queue_listener"]},
+    root={"level": "DEBUG", "handlers": ["queue_listener"]},
     formatters={
         "standard": {"format": "%(asctime)s - %(name)s - %(levelname)s - %(message)s"}
     },
@@ -222,10 +264,19 @@ app = Litestar(
         create_kv_table,
         get_kv_item,
         set_kv_item,
+        set_kv_bulk,
         delete_kv_item,
         execute_sql,
     ],
     logging_config=logging_config,
+    middleware=[
+        # LoggingMiddlewareConfig(
+        # request_log_fields=["headers"],
+        # response_log_fields=["headers"],
+        # ).middleware,
+        # MyCorsMiddleware(),
+    ],
+    cors_config=CORSConfig(allow_origins=["*"]),
 )
 
 
