@@ -201,12 +201,31 @@ class ExecuteSqlDto:
     sql: str
 
 
-@post("/execute/{dbid:str}")
+@post("/select/{dbid:str}")
 async def execute_sql(
     data: ExecuteSqlDto,
     dbid: str,
     sid: Annotated[str | None, Parameter(header="sid")],
 ) -> list[dict]:
+    mgr = KvMgr()
+
+    can_read = _check_kv_perms(mgr, dbid, "read", sid)
+    if not can_read:
+        raise NotAuthorizedException()
+
+    db = mgr.db(dbid)
+    with db.connect() as conn:
+        rs = conn.execute(data.sql).fetchall()
+
+    return [dict(r) for r in rs]
+
+
+@post("/execute/{dbid:str}")
+async def execute_sql_script(
+    data: ExecuteSqlDto,
+    dbid: str,
+    sid: Annotated[str | None, Parameter(header="sid")],
+) -> None:
     mgr = KvMgr()
 
     can_read = _check_kv_perms(mgr, dbid, "read", sid)
@@ -216,9 +235,9 @@ async def execute_sql(
 
     db = mgr.db(dbid)
     with db.connect() as conn:
-        rs = conn.executescript(data.sql).fetchall()
+        conn.executescript(data.sql)
 
-    return [dict(r) for r in rs]
+    return
 
 
 def _check_kv_perms(
@@ -267,6 +286,7 @@ app = Litestar(
         set_kv_bulk,
         delete_kv_item,
         execute_sql,
+        execute_sql_script,
     ],
     logging_config=logging_config,
     middleware=[

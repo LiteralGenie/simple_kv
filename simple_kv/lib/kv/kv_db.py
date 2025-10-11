@@ -8,7 +8,9 @@ from simple_kv.lib.db_wrapper import DbWrapper
 from simple_kv.lib.loggers import KV_LOG
 from simple_kv.lib.utils.kv_utils import KvIdentifier
 
-_ACTION_CODE_TO_NAME = {getattr(sqlite3, k): k for k in dir(sqlite3)}
+_ACTION_CODE_TO_NAME = {
+    getattr(sqlite3, k): k for k in dir(sqlite3) if isinstance(getattr(sqlite3, k), str)
+}
 
 
 class KvDb(DbWrapper):
@@ -40,7 +42,7 @@ class KvDb(DbWrapper):
             f"""
             CREATE TABLE IF NOT EXISTS kv (
                 key     TEXT    PRIMARY KEY,
-                value   TEXT    NOT NULL        -- not strict, any data type
+                value   BLOB    NOT NULL        -- any data type
             )
             """
         )

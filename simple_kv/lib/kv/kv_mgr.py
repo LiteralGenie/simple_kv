@@ -193,7 +193,7 @@ class KvUserDb(DbWrapper):
         for vals in all_vals:
             conn.execute(
                 f"""
-                INSERT INTO users_permissions (
+                INSERT OR REPLACE INTO users_permissions (
                     uid, perm
                 ) VALUES (
                     ?, ?
