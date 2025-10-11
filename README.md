@@ -1,3 +1,9 @@
+# Here be dragons
+
+This basically exposes an SQLite database to the internet. There is a permission / auth system and queries are [limited](https://github.com/LiteralGenie/simple_kv/blob/6be4a255ca56b414abf360709087fe028cbc6b73/simple_kv/lib/kv/kv_db.py#L57) in what functions / tables they can access but this is still largely untested.
+
+Use at your own risk!
+
 # Setup
 
 ```bash
