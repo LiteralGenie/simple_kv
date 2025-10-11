@@ -13,6 +13,8 @@ cd simple_kv
 python3 -m venv venv
 . ./venv/bin/activate
 python -m pip install -e .
+
+# Launch web server
 python -m simple_kv.web
 
 # Create / delete user
