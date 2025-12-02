@@ -220,7 +220,7 @@ async def execute_sql(
     return [dict(r) for r in rs]
 
 
-@post("/execute/{dbid:str}")
+@post("/execute/{dbid:str}", request_max_body_size=50 * 1024**2)
 async def execute_sql_script(
     data: ExecuteSqlDto,
     dbid: str,
@@ -296,7 +296,10 @@ app = Litestar(
         # ).middleware,
         # MyCorsMiddleware(),
     ],
-    cors_config=CORSConfig(allow_origins=["*"]),
+    cors_config=CORSConfig(
+        allow_origins=[""],
+        allow_origin_regex=r".*",
+    ),
 )
 
 
